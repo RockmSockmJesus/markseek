@@ -4,7 +4,7 @@
 
 # markseek
 
-Semantic search over your markdown vault. Lightweight, local, zero-config.
+Semantic search over your markdown vault. Built on Obsidian. Lightweight, local, zero-config.
 
 Query by meaning, not keywords. Works offline. No API keys.
 
