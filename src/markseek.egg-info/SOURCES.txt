@@ -1,0 +1,15 @@
+LICENSE
+README.md
+pyproject.toml
+src/markseek/__init__.py
+src/markseek/cli.py
+src/markseek/config.py
+src/markseek/core.py
+src/markseek/embedder.py
+src/markseek/watcher.py
+src/markseek.egg-info/PKG-INFO
+src/markseek.egg-info/SOURCES.txt
+src/markseek.egg-info/dependency_links.txt
+src/markseek.egg-info/entry_points.txt
+src/markseek.egg-info/requires.txt
+src/markseek.egg-info/top_level.txt
