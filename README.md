@@ -56,7 +56,7 @@ markseek "what does Frankl say about meaning and suffering" -n 5
 
 3. **Watch for changes (background index):**
 ```bash
-markseek watch
+markseek --watch
 ```
 
 Run this in a terminal, or as a systemd/launchd service. Whenever you
@@ -69,9 +69,9 @@ within 2 seconds.
 |---------|-------------|
 | `markseek "your query"` | Semantic search (auto-indexes on first run) |
 | `markseek -n 10 "query"` | Top 10 results |
-| `markseek watch` | Start auto-indexing watcher |
-| `markseek index` | Manually update the index |
-| `markseek index --rebuild` | Force full reindex |
+| `markseek --watch` | Start auto-indexing watcher (background) |
+| `markseek --index` | Manually update the index |
+| `markseek --index --rebuild` | Force full reindex |
 | `markseek --status` | Show index stats (files, chunks, model) |
 | `markseek --configure` | Interactive config wizard |
 

@@ -40,7 +40,6 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
-    "pytest-asyncio",
     "ruff",
 ]
 
@@ -51,7 +50,6 @@ markseek = "markseek.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-markseek = ["templates/*"]
 
 [tool.ruff]
 line-length = 100

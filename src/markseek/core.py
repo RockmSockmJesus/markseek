@@ -26,6 +26,11 @@ def _quiet_logs():
 from markseek.config import Config
 
 
+# Long-paragraph threshold: paragraphs exceeding max_chunk_size * this
+# factor get split into sentences instead of kept whole.
+_PARAGRAPH_OVERFLOW_FACTOR = 2
+
+
 def _file_hash(filepath: Path) -> str:
     h = hashlib.md5()
     try:
@@ -58,6 +63,8 @@ def _chunk_text(text: str, filepath: str, cfg: Config) -> list[dict]:
     current = []
     current_len = 0
 
+    overflow_threshold = cfg.max_chunk_size * _PARAGRAPH_OVERFLOW_FACTOR
+
     for p in paragraphs:
         p = p.strip()
         if not p:
@@ -65,7 +72,7 @@ def _chunk_text(text: str, filepath: str, cfg: Config) -> list[dict]:
 
         # If a single paragraph is much longer than max_chunk_size,
         # split it into sentences
-        if len(p) > cfg.max_chunk_size * 2:
+        if len(p) > overflow_threshold:
             if current:
                 chunks.append({
                     "text": "\n\n".join(current),
@@ -74,7 +81,7 @@ def _chunk_text(text: str, filepath: str, cfg: Config) -> list[dict]:
                 current = []
                 current_len = 0
 
-            sentences = p.replace(". ", ".\n").split("\n")
+            sentences = _split_sentences(p)
             sent_chunk = []
             sent_len = 0
             for s in sentences:
@@ -113,6 +120,15 @@ def _chunk_text(text: str, filepath: str, cfg: Config) -> list[dict]:
     return chunks
 
 
+def _split_sentences(paragraph: str) -> list[str]:
+    """Split a paragraph into sentences with basic abbreviation awareness."""
+    import re
+    # Split on sentence-ending punctuation followed by space (or end of string)
+    # Skip common abbreviations
+    pattern = r'(?<=[.!?])\s+(?![A-Z][a-z]\.\s|[A-Z]\.\s|e\.g\.\s|i\.e\.\s|Dr\.\s|Mr\.\s|Mrs\.\s|Ms\.\s|Prof\.\s|Inc\.\s|Ltd\.\s|Jr\.\s|Sr\.\s|vs\.\s|etc\.\s|http|ftp)'
+    return re.split(pattern, paragraph) if re.search(pattern, paragraph) else [paragraph]
+
+
 class Index:
     """Manages the ChromaDB vector index for a vault."""
 
@@ -122,6 +138,7 @@ class Index:
         self.cfg = cfg
         self._client: Optional[chromadb.PersistentClient] = None
         self._col = None
+        self._all_ids: Optional[set[str]] = None
 
     @property
     def client(self) -> chromadb.PersistentClient:
@@ -138,6 +155,16 @@ class Index:
                 metadata={"hnsw:space": "cosine"},
             )
         return self._col
+
+    def _refresh_ids(self):
+        """Load all chunk IDs into memory once per indexing session."""
+        self._all_ids = set(self.collection.get(include=[])["ids"])
+
+    @property
+    def _existing_ids(self) -> set[str]:
+        if self._all_ids is None:
+            self._refresh_ids()
+        return self._all_ids
 
     def _meta_path(self) -> Path:
         return Path(self.cfg.index_path) / "meta.json"
@@ -174,6 +201,7 @@ class Index:
         except ValueError:
             pass  # collection doesn't exist yet
         self._col = None
+        self._all_ids = None
         meta = {"file_hashes": {}}
         self._save_meta(meta)
         self.index_all()
@@ -187,7 +215,9 @@ class Index:
 
         meta = self._load_meta()
         col = self.collection
-        existing_ids = set(col.get(include=[])["ids"])
+
+        # Load all IDs once
+        self._refresh_ids()
 
         # Determine which files changed
         current = {}
@@ -199,11 +229,16 @@ class Index:
 
         current_set = set(current.keys())
 
-        # Remove deleted files
-        for eid in existing_ids:
+        # Collect all deleted file IDs and batch delete
+        to_delete = []
+        for eid in self._existing_ids:
             eid_file = eid.rsplit("::", 1)[0]
             if eid_file not in current_set:
-                col.delete(ids=[eid])
+                to_delete.append(eid)
+                # Also remove from our in-memory set
+                self._all_ids.discard(eid)
+        if to_delete:
+            col.delete(ids=to_delete)
 
         # Index changed/new files
         from markseek.embedder import get_model
@@ -216,9 +251,9 @@ class Index:
             new_hash = current.get(fstr)
 
             if old_hash == new_hash:
-                # Check chunks exist
+                # Check chunks exist using cached IDs
                 prefix = fstr + "::"
-                matching = [eid for eid in col.get(include=[])["ids"] if eid.startswith(prefix)]
+                matching = [eid for eid in self._existing_ids if eid.startswith(prefix)]
                 if matching:
                     continue
 
@@ -232,24 +267,23 @@ class Index:
             if not chunks:
                 continue
 
-            texts = []
-            ids = []
-            metadatas = []
-            for i, chk in enumerate(chunks):
-                texts.append(chk["text"])
-                ids.append(f"{chk['file']}::{i}")
-                metadatas.append({"file": chk["file"]})
+            texts = [chk["text"] for chk in chunks]
+            ids = [f"{chk['file']}::{i}" for i, chk in enumerate(chunks)]
+            metadatas = [{"file": chk["file"]} for chk in chunks]
 
-            # Remove old chunks for this file
+            # Remove old chunks for this file (batch delete)
             prefix = fstr + "::"
-            old_ids = [eid for eid in col.get(include=[])["ids"] if eid.startswith(prefix)]
+            old_ids = [eid for eid in self._existing_ids if eid.startswith(prefix)]
             if old_ids:
                 col.delete(ids=old_ids)
+                for oid in old_ids:
+                    self._all_ids.discard(oid)
 
             _quiet_logs()
             embeddings = model.encode(texts, show_progress_bar=False).tolist()
 
             col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
+            self._existing_ids.update(ids)
             meta.setdefault("file_hashes", {})[fstr] = new_hash
             indexed_count += 1
 
@@ -270,6 +304,10 @@ class Index:
         model = get_model(self.cfg.model_name)
 
         col = self.collection
+
+        # Refresh IDs once if not already done
+        self._refresh_ids()
+
         try:
             text = p.read_text()
         except Exception as e:
@@ -280,18 +318,21 @@ class Index:
         if not chunks:
             return
 
-        texts = [c["text"] for c in chunks]
-        ids = [f"{c['file']}::{i}" for i in range(len(chunks))]
-        metadatas = [{"file": c["file"]} for c in chunks]
+        texts = [chk["text"] for chk in chunks]
+        ids = [f"{chk['file']}::{i}" for i, chk in enumerate(chunks)]
+        metadatas = [{"file": chk["file"]} for chk in chunks]
 
-        # Remove old
+        # Remove old chunks (batch delete)
         prefix = str(p) + "::"
-        old_ids = [eid for eid in col.get(include=[])["ids"] if eid.startswith(prefix)]
+        old_ids = [eid for eid in self._existing_ids if eid.startswith(prefix)]
         if old_ids:
             col.delete(ids=old_ids)
+            for oid in old_ids:
+                self._all_ids.discard(oid)
 
         embeddings = model.encode(texts, show_progress_bar=False).tolist()
         col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
+        self._existing_ids.update(ids)
 
         meta = self._load_meta()
         meta.setdefault("file_hashes", {})[str(p)] = _file_hash(p)
@@ -330,7 +371,10 @@ class Index:
             results["metadatas"][0],
             results["distances"][0],
         ):
-            rel = Path(meta["file"]).relative_to(vault)
+            try:
+                rel = Path(meta["file"]).relative_to(vault)
+            except ValueError:
+                rel = Path(meta["file"])
             items.append({
                 "text": doc,
                 "file": str(rel),

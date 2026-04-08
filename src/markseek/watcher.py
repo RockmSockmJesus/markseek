@@ -7,6 +7,7 @@ process or as a background daemon.
 """
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -23,6 +24,7 @@ class VaultWatcher:
         self.cfg = cfg
         self.index = Index(cfg)
         self._pending: dict[str, float] = {}
+        self._lock = threading.Lock()
 
     def start(self):
         """Start watching for file changes (blocking)."""
@@ -34,15 +36,23 @@ class VaultWatcher:
             raise FileNotFoundError(f"Vault not found: {vault}")
 
         class Handler(FileSystemEventHandler):
+            """Tracks file modification events with thread-safe access."""
+
             def __init__(watcher_self):
-                watcher_self.pending = self._pending
+                watcher_self.extensions = self.cfg.extensions
+                # Use the same dict that the main loop reads from
+                watcher_self._pending = self._pending
+                watcher_self._lock = self._lock
 
             def _maybe_track(watcher_self, event):
                 if event.is_directory:
                     return
-                if not any(event.src_path.endswith(ext) for ext in self.cfg.extensions):
+                if not any(
+                    event.src_path.endswith(ext) for ext in watcher_self.extensions
+                ):
                     return
-                watcher_self.pending[event.src_path] = time.time()
+                with watcher_self._lock:
+                    watcher_self._pending[event.src_path] = time.time()
 
             on_modified = _maybe_track
             on_created = _maybe_track
@@ -59,13 +69,16 @@ class VaultWatcher:
             while True:
                 time.sleep(1)
                 now = time.time()
-                ready = {
-                    fp: t for fp, t in self._pending.items()
-                    if now - t >= self.cfg.debounce_seconds
-                }
+                with self._lock:
+                    ready = {
+                        fp: t
+                        for fp, t in self._pending.items()
+                        if now - t >= self.cfg.debounce_seconds
+                    }
+                    for fp in ready:
+                        del self._pending[fp]
 
                 for fp in ready:
-                    del self._pending[fp]
                     filepath = Path(fp)
                     if filepath.exists():
                         try:
@@ -76,4 +89,4 @@ class VaultWatcher:
         except KeyboardInterrupt:
             logger.info("Stopping watcher...")
             observer.stop()
-        observer.join()
+        observer.join(timeout=5.0)

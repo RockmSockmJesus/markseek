@@ -69,7 +69,7 @@ class Config:
             cfg.vault_path = os.path.expanduser("~/Documents/Obsidian Vault")
 
         index_env = os.environ.get("MARKSEEK_INDEX_PATH")
-        if index_env and not cfg.index_path:
+        if index_env:
             cfg.index_path = os.path.expanduser(index_env)
         elif not cfg.index_path:
             cfg.index_path = os.path.expanduser("~/.cache/markseek/index")
@@ -97,4 +97,4 @@ class Config:
             yaml.dump(data, f, default_flow_style=False)
 
     def vault_exists(self) -> bool:
-        return Path(self.vault_path).exists()
+        return bool(self.vault_path) and Path(self.vault_path).exists()
