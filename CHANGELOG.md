@@ -19,7 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Sentence splitting with abbreviation awareness for long paragraphs.
-- 17 unit tests covering config loading, saving, and text chunking.
 
 ### Removed
 - Stale `templates/*` package_data reference.

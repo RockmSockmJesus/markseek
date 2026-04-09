@@ -32,7 +32,7 @@ _PARAGRAPH_OVERFLOW_FACTOR = 2
 
 
 def _file_hash(filepath: Path) -> str:
-    h = hashlib.md5()
+    h = hashlib.sha256()
     try:
         with open(filepath, "rb") as f:
             for chunk in iter(lambda: f.read(8192), b""):
@@ -231,7 +231,7 @@ class Index:
 
         # Collect all deleted file IDs and batch delete
         to_delete = []
-        for eid in self._existing_ids:
+        for eid in list(self._existing_ids):
             eid_file = eid.rsplit("::", 1)[0]
             if eid_file not in current_set:
                 to_delete.append(eid)
